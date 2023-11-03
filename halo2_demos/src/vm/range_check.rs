@@ -11,19 +11,19 @@ use halo2_proofs::{
 };
 
 #[derive(Debug, Clone)]
-pub struct RangeCheckConfig<F: PrimeField,const RANGE: usize> {
-    pub(super)  range_table: TableColumn,
+pub struct RangeCheckConfig<F: PrimeField, const RANGE: usize> {
+    pub(super) range_table: TableColumn,
     _marker: PhantomData<F>,
 }
 
 #[derive(Debug, Clone)]
 pub struct RangeCheckChip<F: PrimeField, const RANGE: usize> {
-    pub(super)  config: RangeCheckConfig<F,RANGE>,
+    pub(super) config: RangeCheckConfig<F, RANGE>,
     _marker: PhantomData<F>,
 }
 
 impl<F: PrimeField, const RANGE: usize> Chip<F> for RangeCheckChip<F, RANGE> {
-    type Config = RangeCheckConfig<F,RANGE>;
+    type Config = RangeCheckConfig<F, RANGE>;
     type Loaded = ();
 
     fn config(&self) -> &Self::Config {
@@ -36,8 +36,7 @@ impl<F: PrimeField, const RANGE: usize> Chip<F> for RangeCheckChip<F, RANGE> {
 }
 
 impl<F: PrimeField, const RANGE: usize> RangeCheckChip<F, RANGE> {
-
-    pub(super)  fn configure(meta: &mut ConstraintSystem<F>) -> RangeCheckConfig<F,RANGE> {
+    pub(super) fn configure(meta: &mut ConstraintSystem<F>) -> RangeCheckConfig<F, RANGE> {
         let range_table = meta.lookup_table_column();
         RangeCheckConfig {
             range_table: range_table,
@@ -45,7 +44,10 @@ impl<F: PrimeField, const RANGE: usize> RangeCheckChip<F, RANGE> {
         }
     }
 
-    pub(super)  fn load_range_table(config: RangeCheckConfig<F,RANGE>,mut layouter:impl Layouter<F>) -> Result<(), Error> {
+    pub(super) fn load_range_table(
+        config: RangeCheckConfig<F, RANGE>,
+        mut layouter: impl Layouter<F>,
+    ) -> Result<(), Error> {
         layouter.assign_table(
             || "Load Range Table",
             |mut table| {
