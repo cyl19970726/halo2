@@ -1,13 +1,11 @@
 use std::marker::PhantomData;
 
-use ff::{Field, PrimeField};
+use ff::PrimeField;
 use halo2_proofs::{
-    circuit::{AssignedCell, Chip, Layouter, Region, SimpleFloorPlanner, Value},
+    circuit::{Layouter, Value},
     plonk::{
-        Advice, Assigned, Circuit, Column, ConstraintSystem, Constraints, Error, Expression, Fixed,
-        Instance, Selector, TableColumn,
+        ConstraintSystem,Error,TableColumn,
     },
-    poly::Rotation,
 };
 
 /// A lookup table of values from 0..RANGE.
@@ -27,9 +25,9 @@ impl<F: PrimeField, const RANGE: usize> RangeTableConfig<F, RANGE> {
         }
     }
 
-    pub(super) fn load(&self, layouter: &mut impl Layouter<F>) -> Result<(), Error> {
+    pub(super) fn load_table(&self, layouter: &mut impl Layouter<F>) -> Result<(), Error> {
         layouter.assign_table(
-            || "load range-check table",
+            || "Load Range Check Table",
             |mut table| {
                 let mut offset = 0;
                 for value in 0..RANGE {

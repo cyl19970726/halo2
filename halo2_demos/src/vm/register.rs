@@ -1,5 +1,4 @@
-use std::{borrow::BorrowMut, marker::PhantomData, ops::Add, usize, vec};
-
+use super::{RangeCheckChip, RangeCheckConfig};
 use ff::{Field, PrimeField};
 use halo2_proofs::{
     circuit::{AssignedCell, Chip, Layouter, Region, SimpleFloorPlanner, Value},
@@ -9,11 +8,12 @@ use halo2_proofs::{
     },
     poly::Rotation,
 };
+use std::{borrow::BorrowMut, marker::PhantomData, ops::Add, usize, vec};
 /// A = registers[0] , B = registers[1]
 /// A′=A+setA⋅(inA⋅A+inB⋅B+inFREE⋅FREE+CONST−A)
 /// B′=B+setB⋅(inA⋅A+inB⋅B+inFREE⋅FREE+CONST−B)
 #[derive(Debug, Clone)]
-pub(super) struct RegistersConfig<F: PrimeField, const RIGSTER_NUM: usize> {
+pub(super) struct RegistersConfig<F: PrimeField, const RIGSTER_NUM: usize, const RANGE: usize> {
     // The Global Selector to Enable VM Constraints
     pub(super) enable_vm: Selector,
     // The selector for cur_registers
@@ -29,17 +29,20 @@ pub(super) struct RegistersConfig<F: PrimeField, const RIGSTER_NUM: usize> {
     pub(super) const_val: Column<Fixed>,
     // public input and output
     pub(super) instance: Column<Instance>,
+    // lookup range check table
+    pub(super) enable_lookup_range: Selector,
+    pub(super) range_check_table: RangeCheckConfig<F,RANGE>,
     _marker: PhantomData<F>,
 }
 
 #[derive(Debug, Clone)]
-struct RegisterChip<F: PrimeField, const RIGSTER_NUM: usize> {
-    config: RegistersConfig<F, RIGSTER_NUM>,
+struct RegisterChip<F: PrimeField, const RIGSTER_NUM: usize, const RANGE: usize> {
+    config: RegistersConfig<F, RIGSTER_NUM,RANGE>,
     _marker: PhantomData<F>,
 }
 
-impl<F: PrimeField, const RIGSTER_NUM: usize> Chip<F> for RegisterChip<F, RIGSTER_NUM> {
-    type Config = RegistersConfig<F, RIGSTER_NUM>;
+impl<F: PrimeField, const RIGSTER_NUM: usize,const RANGE: usize> Chip<F> for RegisterChip<F, RIGSTER_NUM,RANGE> {
+    type Config = RegistersConfig<F, RIGSTER_NUM,RANGE>;
     type Loaded = ();
 
     fn config(&self) -> &Self::Config {
@@ -51,15 +54,15 @@ impl<F: PrimeField, const RIGSTER_NUM: usize> Chip<F> for RegisterChip<F, RIGSTE
     }
 }
 
-impl<F: PrimeField, const RIGSTER_NUM: usize> RegisterChip<F, RIGSTER_NUM> {
-    pub fn construct(config: RegistersConfig<F, RIGSTER_NUM>) -> Self {
+impl<F: PrimeField, const RIGSTER_NUM: usize,const RANGE: usize> RegisterChip<F, RIGSTER_NUM,RANGE> {
+    pub fn construct(config: RegistersConfig<F, RIGSTER_NUM,RANGE>) -> Self {
         Self {
             config: config,
             _marker: PhantomData,
         }
     }
 
-    pub(super) fn configure(meta: &mut ConstraintSystem<F>) -> RegistersConfig<F, RIGSTER_NUM> {
+    pub(super) fn configure(meta: &mut ConstraintSystem<F>) -> RegistersConfig<F, RIGSTER_NUM,RANGE> {
         let enable_vm = meta.selector();
 
         let in_registers: [Selector; RIGSTER_NUM] =
@@ -96,6 +99,7 @@ impl<F: PrimeField, const RIGSTER_NUM: usize> RegisterChip<F, RIGSTER_NUM> {
             let exps: Vec<(Expression<F>, Expression<F>, Expression<F>, Expression<F>)> =
                 in_registers
                     .into_iter()
+                    .clone()
                     .enumerate()
                     .map(|item| {
                         let in_register_selector = v_cells.query_selector(item.1);
@@ -137,6 +141,25 @@ impl<F: PrimeField, const RIGSTER_NUM: usize> RegisterChip<F, RIGSTER_NUM> {
             Constraints::with_selector(enable_vm_selector, constraints)
         });
 
+        let range_check_table = RangeCheckChip::<F, RANGE>::configure(meta);
+        let enable_lookup_range = meta.complex_selector();
+
+        cur_registers.clone().into_iter().for_each(|item|{
+            meta.lookup(|v_cells|{
+                let selector = v_cells.query_selector(enable_lookup_range);
+                let val = v_cells.query_advice(item, Rotation::cur());
+                vec![(selector.clone() * val, range_check_table.range_table)] 
+            });
+        });
+
+        next_registers.clone().into_iter().for_each(|item|{
+            meta.lookup(|v_cells|{
+                let selector = v_cells.query_selector(enable_lookup_range);
+                let val = v_cells.query_advice(item, Rotation::cur());
+                vec![(selector.clone() * val, range_check_table.range_table)] 
+            });
+        });
+
         RegistersConfig {
             enable_vm,
             in_registers,
@@ -147,6 +170,8 @@ impl<F: PrimeField, const RIGSTER_NUM: usize> RegisterChip<F, RIGSTER_NUM> {
             in_free,
             const_val,
             instance,
+            enable_lookup_range,
+            range_check_table,
             _marker: PhantomData,
         }
     }
@@ -354,6 +379,9 @@ impl<F: PrimeField, const RIGSTER_NUM: usize> RegisterChip<F, RIGSTER_NUM> {
                 // assign enable vm selector
                 self.config.enable_vm.enable(&mut region, 0)?;
 
+                // assign enable lookup range selector 
+                self.config.enable_lookup_range.enable(&mut region, 0)?;
+
                 // enable copy constraints for advice and assign self.config.cur_registers
                 let cur_register_cells = prev_register_cells
                     .clone()
@@ -512,13 +540,13 @@ impl<F: PrimeField, const RIGSTER_NUM: usize> RegisterChip<F, RIGSTER_NUM> {
 }
 
 #[derive(Default)]
-struct SimpleInstructionCircuits<F: PrimeField> {
+struct SimpleInstructionCircuits<F: PrimeField,const RIGSTER_NUM: usize, const RANGE:usize> {
     free_value: Value<F>,
     const_value: Value<F>,
 }
 
-impl<F: PrimeField> Circuit<F> for SimpleInstructionCircuits<F> {
-    type Config = RegistersConfig<F, 2>;
+impl<F: PrimeField,const RIGSTER_NUM: usize, const RANGE:usize> Circuit<F> for SimpleInstructionCircuits<F,RIGSTER_NUM,RANGE> {
+    type Config = RegistersConfig<F, RIGSTER_NUM, RANGE>;
     type FloorPlanner = SimpleFloorPlanner;
 
     fn without_witnesses(&self) -> Self {
@@ -526,7 +554,7 @@ impl<F: PrimeField> Circuit<F> for SimpleInstructionCircuits<F> {
     }
 
     fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
-        RegisterChip::<F, 2>::configure(meta)
+        RegisterChip::<F, RIGSTER_NUM,RANGE>::configure(meta)
     }
 
     fn synthesize(
@@ -534,9 +562,13 @@ impl<F: PrimeField> Circuit<F> for SimpleInstructionCircuits<F> {
         config: Self::Config,
         mut layouter: impl Layouter<F>,
     ) -> Result<(), Error> {
-        let chip = RegisterChip::construct(config);
+        let chip = RegisterChip::<F,RIGSTER_NUM,RANGE>::construct(config.clone());
         let A_id: usize = 0;
         let B_id: usize = 1;
+
+        // assign the lookup table
+        RangeCheckChip::load_range_table(config.range_check_table,layouter.namespace(||"Layouter::range_check_chip load table"))?;
+        
         let prev_register_cells = chip.set_register_from_getFreeInput_assignment(
             layouter.namespace(|| "Layouter::set_register_from_getFreeInput_assignment"),
             self.free_value.clone(),
@@ -577,15 +609,15 @@ mod tests {
 
     #[test]
     fn test_simple_instructions() {
-        let const_value = Fp::from(3);
-        let free_value = Fp::from(7);
-        let circuit_instance = SimpleInstructionCircuits::<Fp> {
+        let const_value = Fp::from(1);
+        let free_value = Fp::from(2);
+        let circuit_instance = SimpleInstructionCircuits::<Fp,2,16> {
             free_value: Value::known(const_value.clone()),
             const_value: Value::known(free_value.clone()),
         };
 
-        let output = vec![Fp::from(10)];
-        let prover = MockProver::run(4, &circuit_instance, vec![output]).unwrap();
+        let output = vec![Fp::from(3)];
+        let prover = MockProver::run(5, &circuit_instance, vec![output]).unwrap();
         prover.assert_satisfied();
     }
 
@@ -603,21 +635,21 @@ mod tests {
 
         let const_value = Fp::from(3);
         let free_value = Fp::from(7);
-        let circuit_instance = SimpleInstructionCircuits::<Fp> {
+        let circuit_instance = SimpleInstructionCircuits::<Fp,2,16> {
             free_value: Value::known(const_value.clone()),
             const_value: Value::known(free_value.clone()),
         };
         halo2_proofs::dev::CircuitLayout::default()
-            .mark_equality_cells(false)
+            .mark_equality_cells(true)
             .show_equality_constraints(false)
             // You can optionally render only a section of the circuit.
-            .view_width(0..10)
+            .view_width(0..12)
             //  .view_height(0..16)
             // You can hide labels, which can be useful with smaller areas.
             .show_labels(true)
             // Render the circuit onto your area!
             // The first argument is the size parameter for the circuit.
-            .render(4, &circuit_instance, &root)
+            .render(5, &circuit_instance, &root)
             .unwrap();
     }
 }

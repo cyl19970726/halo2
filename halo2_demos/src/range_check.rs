@@ -159,7 +159,7 @@ mod tests {
             config: Self::Config,
             mut layouter: impl Layouter<F>,
         ) -> Result<(), Error> {
-            config.table.load(&mut layouter)?;
+            config.table.load_table(&mut layouter)?;
 
             config.assign_simple(layouter.namespace(|| "Assign simple value"), self.value)?;
             config.assign_lookup(
