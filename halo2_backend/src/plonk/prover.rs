@@ -1,7 +1,7 @@
 use group::Curve;
 use halo2_middleware::ff::{Field, FromUniformBytes, WithSmallOrderMulGroup};
 use halo2_middleware::zal::{
-    impls::{PlonkEngine, PlonkEngineConfig},
+    impls::{PlonkEngine, PlonkEngineConfig, H2cEngine},
     traits::MsmAccel,
 };
 use rand_core::RngCore;
@@ -49,7 +49,8 @@ pub struct ProverV2Single<
     E: EncodedChallenge<Scheme::Curve>,
     R: RngCore,
     T: TranscriptWrite<Scheme::Curve, E>,
->(ProverV2<'a, 'params, Scheme, P, E, R, T>);
+    M: MsmAccel<Scheme::Curve>,
+>(ProverV2<'a, 'params, Scheme, P, E, R, T, M>);
 
 impl<
         'a,
@@ -59,11 +60,12 @@ impl<
         E: EncodedChallenge<Scheme::Curve>,
         R: RngCore,
         T: TranscriptWrite<Scheme::Curve, E>,
-    > ProverV2Single<'a, 'params, Scheme, P, E, R, T>
+        M: MsmAccel<Scheme::Curve>,
+    > ProverV2Single<'a, 'params, Scheme, P, E, R, T, M>
 {
     /// Create a new prover object
-    pub fn new_with_engine<M: MsmAccel<Scheme::Curve>>(
-        engine: &PlonkEngine<Scheme::Curve, M>,
+    pub fn new_with_engine(
+        engine: PlonkEngine<Scheme::Curve, M>,
         params: &'params Scheme::ParamsProver,
         pk: &'a ProvingKey<Scheme::Curve>,
         // TODO: If this was a vector the usage would be simpler
@@ -93,25 +95,24 @@ impl<
         instance: &[&[Scheme::Scalar]],
         rng: R,
         transcript: &'a mut T,
-    ) -> Result<Self, Error>
+    ) -> Result<ProverV2Single<'a, 'params, Scheme, P, E, R, T, H2cEngine>, Error>
     where
         Scheme::Scalar: WithSmallOrderMulGroup<3> + FromUniformBytes<64>,
     {
         let engine = PlonkEngineConfig::build_default();
-        Self::new_with_engine(&engine, params, pk, instance, rng, transcript)
+        ProverV2Single::new_with_engine(engine, params, pk, instance, rng, transcript)
     }
 
     /// Commit the `witness` at `phase` and return the challenges after `phase`.
-    pub fn commit_phase<M: MsmAccel<Scheme::Curve>>(
+    pub fn commit_phase(
         &mut self,
-        engine: &PlonkEngine<Scheme::Curve, M>,
         phase: u8,
         witness: Vec<Option<Vec<Scheme::Scalar>>>,
     ) -> Result<HashMap<usize, Scheme::Scalar>, Error>
     where
         Scheme::Scalar: WithSmallOrderMulGroup<3> + FromUniformBytes<64>,
     {
-        self.0.commit_phase(engine, phase, vec![witness])
+        self.0.commit_phase(phase, vec![witness])
     }
 
     /// Finalizes the proof creation.
@@ -119,20 +120,7 @@ impl<
     where
         Scheme::Scalar: WithSmallOrderMulGroup<3> + FromUniformBytes<64>,
     {
-        let engine = PlonkEngineConfig::build_default();
-        self.create_proof_with_engine(&engine)
-    }
-
-    /// Finalizes the proof creation.
-    /// TODO: change to "ZalEngine" which will contain MsmAccel and FftAccel trait accelerators
-    pub fn create_proof_with_engine<M: MsmAccel<Scheme::Curve>>(
-        self,
-        engine: &PlonkEngine<Scheme::Curve, M>,
-    ) -> Result<(), Error>
-    where
-        Scheme::Scalar: WithSmallOrderMulGroup<3> + FromUniformBytes<64>,
-    {
-        self.0.create_proof_with_engine(engine)
+        self.0.create_proof()
     }
 }
 
@@ -147,7 +135,9 @@ pub struct ProverV2<
     E: EncodedChallenge<Scheme::Curve>,
     R: RngCore,
     T: TranscriptWrite<Scheme::Curve, E>,
+    M: MsmAccel<Scheme::Curve>,
 > {
+    engine: PlonkEngine<Scheme::Curve, M>,
     // Circuit and setup fields
     params: &'params Scheme::ParamsProver,
     pk: &'a ProvingKey<Scheme::Curve>,
@@ -171,11 +161,12 @@ impl<
         E: EncodedChallenge<Scheme::Curve>,
         R: RngCore,
         T: TranscriptWrite<Scheme::Curve, E>,
-    > ProverV2<'a, 'params, Scheme, P, E, R, T>
+        M: MsmAccel<Scheme::Curve>,
+    > ProverV2<'a, 'params, Scheme, P, E, R, T, M>
 {
     /// Create a new prover object
-    pub fn new_with_engine<M: MsmAccel<Scheme::Curve>>(
-        engine: &PlonkEngine<Scheme::Curve, M>,
+    pub fn new_with_engine(
+        engine: PlonkEngine<Scheme::Curve, M>,
         params: &'params Scheme::ParamsProver,
         pk: &'a ProvingKey<Scheme::Curve>,
         // TODO: If this was a vector the usage would be simpler.
@@ -274,6 +265,7 @@ impl<
         let challenges = HashMap::<usize, Scheme::Scalar>::with_capacity(meta.num_challenges);
 
         Ok(ProverV2 {
+            engine,
             params,
             pk,
             phases,
@@ -289,9 +281,8 @@ impl<
 
     /// Commit the `witness` at `phase` and return the challenges after `phase`.
     #[allow(clippy::type_complexity)]
-    pub fn commit_phase<M: MsmAccel<Scheme::Curve>>(
+    pub fn commit_phase(
         &mut self,
-        engine: &PlonkEngine<Scheme::Curve, M>,
         phase: u8,
         witness: Vec<Vec<Option<Vec<Scheme::Scalar>>>>,
     ) -> Result<HashMap<usize, Scheme::Scalar>, Error>
@@ -409,7 +400,7 @@ impl<
                 let advice_commitments_projective: Vec<_> = advice_values
                     .iter()
                     .zip(blinds.iter())
-                    .map(|(poly, blind)| params.commit_lagrange(&engine.msm_backend, poly, *blind))
+                    .map(|(poly, blind)| params.commit_lagrange(&self.engine.msm_backend, poly, *blind))
                     .collect();
                 let mut advice_commitments =
                     vec![Scheme::Curve::identity(); advice_commitments_projective.len()];
@@ -455,10 +446,7 @@ impl<
     }
 
     /// Finalizes the proof creation.
-    pub fn create_proof_with_engine<M: MsmAccel<Scheme::Curve>>(
-        mut self,
-        engine: &PlonkEngine<Scheme::Curve, M>,
-    ) -> Result<(), Error>
+    pub fn create_proof(mut self) -> Result<(), Error>
     where
         Scheme::Scalar: WithSmallOrderMulGroup<3> + FromUniformBytes<64>,
     {
@@ -490,7 +478,7 @@ impl<
                     .iter()
                     .map(|lookup| {
                         lookup_commit_permuted(
-                            engine,
+                            &self.engine,
                             lookup,
                             pk,
                             params,
@@ -527,7 +515,7 @@ impl<
             .zip(advice.iter())
             .map(|(instance, advice)| {
                 permutation_commit(
-                    engine,
+                    &self.engine,
                     &meta.permutation,
                     params,
                     pk,
@@ -551,7 +539,7 @@ impl<
                     .into_iter()
                     .map(|lookup| {
                         lookup.commit_product(
-                            engine,
+                            &self.engine,
                             pk,
                             params,
                             beta,
@@ -573,7 +561,7 @@ impl<
                     .iter()
                     .map(|shuffle| {
                         shuffle_commit_product(
-                            engine,
+                            &self.engine,
                             shuffle,
                             pk,
                             params,
@@ -594,7 +582,7 @@ impl<
 
         // Commit to the vanishing argument's random polynomial for blinding h(x_3)
         let vanishing = vanishing::Argument::commit(
-            &engine.msm_backend,
+            &self.engine.msm_backend,
             params,
             domain,
             &mut rng,
@@ -646,7 +634,7 @@ impl<
 
         // Construct the vanishing argument's h(X) commitments
         let vanishing =
-            vanishing.construct(engine, params, domain, h_poly, &mut rng, self.transcript)?;
+            vanishing.construct(&self.engine, params, domain, h_poly, &mut rng, self.transcript)?;
 
         let x: ChallengeX<_> = self.transcript.squeeze_challenge_scalar();
         let xn = x.pow([params.n()]);
@@ -786,7 +774,7 @@ impl<
 
         let prover = P::new(params);
         prover
-            .create_proof_with_engine(&engine.msm_backend, rng, self.transcript, instances)
+            .create_proof_with_engine(&self.engine.msm_backend, rng, self.transcript, instances)
             .map_err(|_| Error::ConstraintSystemFailure)?;
 
         Ok(())
@@ -801,20 +789,11 @@ impl<
         instances: &[&[&[Scheme::Scalar]]],
         rng: R,
         transcript: &'a mut T,
-    ) -> Result<Self, Error>
+    ) -> Result<ProverV2<'a, 'params, Scheme, P, E, R, T, H2cEngine>, Error>
     where
         Scheme::Scalar: WithSmallOrderMulGroup<3> + FromUniformBytes<64>,
     {
         let engine = PlonkEngineConfig::build_default();
-        Self::new_with_engine(&engine, params, pk, instances, rng, transcript)
-    }
-
-    /// Finalizes the proof creation.
-    pub fn create_proof(self) -> Result<(), Error>
-    where
-        Scheme::Scalar: WithSmallOrderMulGroup<3> + FromUniformBytes<64>,
-    {
-        let engine = PlonkEngineConfig::build_default();
-        self.create_proof_with_engine(&engine)
+        ProverV2::new_with_engine(engine, params, pk, instances, rng, transcript)
     }
 }

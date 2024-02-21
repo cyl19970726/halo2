@@ -179,6 +179,7 @@ pub mod impls {
 
     // Backend-agnostic engine objects
     // ---------------------------------------------------
+    #[derive(Debug)]
     pub struct PlonkEngine<C: CurveAffine, MsmEngine: MsmAccel<C>> {
         pub msm_backend: MsmEngine,
         _marker: PhantomData<C>, // compiler complains about unused C otherwise

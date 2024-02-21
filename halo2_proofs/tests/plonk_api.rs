@@ -467,7 +467,7 @@ fn plonk_api() {
         T: TranscriptWriterBuffer<Vec<u8>, Scheme::Curve, E>,
         M: MsmAccel<Scheme::Curve>,
     >(
-        engine: &PlonkEngine<Scheme::Curve, M>,
+        engine: PlonkEngine<Scheme::Curve, M>,
         rng: R,
         params: &'params Scheme::ParamsProver,
         pk: &ProvingKey<Scheme::Curve>,
@@ -521,7 +521,7 @@ fn plonk_api() {
         Scheme::Scalar: Ord + WithSmallOrderMulGroup<3> + FromUniformBytes<64>,
     {
         let engine = PlonkEngineConfig::build_default();
-        create_proof_with_engine::<Scheme, P, _, _, T, _>(&engine, rng, params, pk)
+        create_proof_with_engine::<Scheme, P, _, _, T, _>(engine, rng, params, pk)
     }
 
     fn verify_proof<

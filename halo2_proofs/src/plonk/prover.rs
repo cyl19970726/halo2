@@ -25,7 +25,7 @@ pub fn create_proof_with_engine<
     ConcreteCircuit: Circuit<Scheme::Scalar>,
     M: MsmAccel<Scheme::Curve>,
 >(
-    engine: &PlonkEngine<Scheme::Curve, M>,
+    engine: PlonkEngine<Scheme::Curve, M>,
     params: &'params Scheme::ParamsProver,
     pk: &ProvingKey<Scheme::Curve>,
     circuits: &[ConcreteCircuit],
@@ -46,7 +46,7 @@ where
         .enumerate()
         .map(|(i, circuit)| WitnessCalculator::new(params.k(), circuit, &config, &cs, instances[i]))
         .collect();
-    let mut prover = ProverV2::<Scheme, P, _, _, _>::new_with_engine(
+    let mut prover = ProverV2::<Scheme, P, _, _, _, _>::new_with_engine(
         engine, params, pk, instances, rng, transcript,
     )?;
     let mut challenges = HashMap::new();
@@ -56,9 +56,9 @@ where
         for witness_calc in witness_calcs.iter_mut() {
             witnesses.push(witness_calc.calc(phase.0, &challenges)?);
         }
-        challenges = prover.commit_phase(engine, phase.0, witnesses).unwrap();
+        challenges = prover.commit_phase(phase.0, witnesses).unwrap();
     }
-    prover.create_proof_with_engine(engine)
+    prover.create_proof()
 }
 
 /// This creates a proof for the provided `circuit` when given the public
@@ -86,7 +86,7 @@ where
 {
     let engine = PlonkEngineConfig::build_default();
     create_proof_with_engine::<Scheme, P, _, _, _, _, _>(
-        &engine, params, pk, circuits, instances, rng, transcript,
+        engine, params, pk, circuits, instances, rng, transcript,
     )
 }
 
