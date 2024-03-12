@@ -31,6 +31,11 @@ serde = { version = "1", optional = true, features = ["derive"] }
 serde_derive = { version = "1", optional = true}
 rayon = "1.8"
 
+icicle-cuda-runtime = {path = "../../icicle/wrappers/rust/icicle-cuda-runtime"}
+icicle-core = { path = "../../icicle/wrappers/rust/icicle-core" }
+icicle-bn254 = { path = "../../icicle/wrappers/rust/icicle-curves/icicle-bn254", features = ["g2"] }
+icicle-bls12-377 = { path = "../../icicle/wrappers/rust/icicle-curves/icicle-bls12-377" }
+
 [dev-dependencies]
 ark-std = { version = "0.3" }
 proptest = "1"
